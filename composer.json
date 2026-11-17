@@ -1,0 +1,61 @@
+{
+    "name": "alveby/atrium-wordpress",
+    "description": "Move a WordPress site to Atrium: posts, pages, custom post types, ACF, SEO, languages, files and a 301 map",
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://github.com/AlveBy/atrium",
+    "support": {
+        "issues": "https://github.com/AlveBy/atrium/issues",
+        "source": "https://github.com/AlveBy/atrium"
+    },
+    "keywords": [
+        "laravel",
+        "admin",
+        "cms",
+        "wordpress",
+        "migration",
+        "acf",
+        "wpml",
+        "polylang"
+    ],
+    "require": {
+        "php": "^8.3",
+        "alveby/atrium": "^0.1",
+        "illuminate/console": "^13.0",
+        "illuminate/database": "^13.0",
+        "illuminate/support": "^13.0"
+    },
+    "require-dev": {
+        "alveby/atrium-news": "^0.1",
+        "alveby/atrium-pages": "^0.1",
+        "alveby/atrium-theme": "^0.1",
+        "orchestra/testbench": "^11.0",
+        "phpunit/phpunit": "^12.5"
+    },
+    "suggest": {
+        "alveby/atrium-news": "Posts become news",
+        "alveby/atrium-pages": "Pages become pages, with their tree"
+    },
+    "autoload": {
+        "psr-4": {
+            "Atrium\\WordPress\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Atrium\\WordPress\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Atrium\\WordPress\\WordPressServiceProvider"
+            ]
+        },
+        "branch-alias": {
+            "dev-main": "0.1.x-dev"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
