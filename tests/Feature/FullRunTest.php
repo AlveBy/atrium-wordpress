@@ -108,7 +108,8 @@ final class FullRunTest extends TestCase
             $this->decoded($hello, 'detail_text'),
         );
         $this->assertSame([$default => 'A short hello.'], $this->decoded($hello, 'preview_text'));
-        $this->assertSame('2024-05-10 10:00:00', $hello->active_from);
+        // 10:00 on the site's clock, which is three hours ahead of UTC: the new site keeps UTC.
+        $this->assertSame('2024-05-10 07:00:00', $hello->active_from);
         $this->assertTrue((bool) $hello->active);
         $this->assertSame(500, (int) $hello->sort);
 
@@ -154,13 +155,81 @@ final class FullRunTest extends TestCase
         $this->assertFalse((bool) $this->target('post', Wp::CONTACTS)->active);
         $scheduled = $this->target('post', Wp::SCHEDULED);
         $this->assertTrue((bool) $scheduled->active);
-        $this->assertSame('2030-01-15 10:00:00', $scheduled->active_from);
+        $this->assertSame('2030-01-15 07:00:00', $scheduled->active_from);
 
         // A featured image that is not there leaves the picture empty; so does one whose file is gone.
         $this->assertNull($this->target('post', Wp::ORPHAN)->preview_picture);
         $this->assertNull($this->target('post', Wp::PIZZA)->photo);
         $this->assertSame('/wp-content/uploads/2024/05/photo.jpg', $this->target('post', Wp::HELLO)->preview_picture);
         $this->assertNull($this->target('post', Wp::GUTENBERG)->preview_picture);
+    }
+
+    /**
+     * The made-up site with three more posts: one behind a password, one with
+     * a gallery of its own pictures and one with a captioned picture; then
+     * the whole move.
+     */
+    private function runWithTheNewKindsOfPosts(string $timezone = 'UTC'): string
+    {
+        config(['app.timezone' => $timezone]);
+        $this->site();
+        $this->wpPost(450, 'post', 'Secret', ['post_name' => 'secret', 'post_password' => 'hunter2', 'post_content' => 'For friends only.', 'post_date' => '2024-07-01 12:00:00', 'post_date_gmt' => '2024-07-01 09:00:00']);
+        $this->wpPost(451, 'post', 'With a gallery', ['post_name' => 'with-a-gallery', 'post_content' => "See:\n\n[gallery]\n\nand\n\n[gallery ids=\"53,50\"]"]);
+        $this->wpPost(452, 'post', 'With a caption', ['post_name' => 'with-a-caption', 'post_content' => '[caption id="attachment_50" width="300"]<img src="'.Wp::OLD_URL.'/wp-content/uploads/2024/05/photo-300x200.jpg" alt="Street"> The street[/caption]']);
+        $this->wp()->table('wp_posts')->where('ID', Wp::BORSCHT_PHOTO)->update(['post_parent' => 451]);
+        $this->wp()->table('wp_posts')->where('ID', Wp::MANUAL)->update(['post_parent' => 451]);
+        $this->generateAndMigrate();
+        [$exit, $output] = $this->cli('atrium:wordpress:migrate:data');
+        $this->assertSame(0, $exit, $output);
+
+        return $output;
+    }
+
+    public function test_a_post_behind_a_password_arrives_unpublished_and_is_told(): void
+    {
+        $output = $this->runWithTheNewKindsOfPosts();
+
+        $secret = $this->target('post', 450);
+        $this->assertFalse((bool) $secret->active);
+        $this->assertSame(['en' => '<p>For friends only.</p>'], $this->decoded($secret, 'detail_text'));
+        $this->assertSame('2024-07-01 09:00:00', $secret->active_from);
+        $this->assertTrue((bool) $this->target('post', Wp::HELLO)->active);
+        $this->assertStringContainsString("  - post 450 is protected by a password; it moved unpublished so its text does not go public\n", $output);
+        $this->assertSame(1, substr_count($output, 'is protected by a password'));
+
+        // What the old site shows nobody without the password is not a loss the check should report.
+        [$exit, $parity] = $this->cli('atrium:wordpress:parity');
+        $this->assertSame(0, $exit, $parity);
+        $this->assertStringContainsString('Everything moved.', $parity);
+    }
+
+    public function test_galleries_and_captions_arrive_as_figures_with_their_files_copied(): void
+    {
+        $output = $this->runWithTheNewKindsOfPosts();
+
+        $photo = '<figure><img src="/wp-content/uploads/2024/05/photo.jpg" alt="A photo of the street"></figure>';
+        $borscht = '<figure><img src="/wp-content/uploads/2024/06/borscht.png" alt="A plate of borscht"></figure>';
+        // The pictures attached to the post, then the ones it names: the manual is a PDF, not a picture, so only the photo is left.
+        $this->assertSame(
+            ['en' => "<p>See:</p>\n".$borscht."\n<p>and</p>\n".$photo],
+            $this->decoded($this->target('post', 451), 'detail_text'),
+        );
+        $this->assertSame(
+            ['en' => '<figure><img src="/wp-content/uploads/2024/05/photo-300x200.jpg" alt="Street"><figcaption>The street</figcaption></figure>'],
+            $this->decoded($this->target('post', 452), 'detail_text'),
+        );
+        $this->assertFileExists($this->published('wp-content/uploads/2024/06/borscht.png'));
+        $this->assertFileExists($this->published('wp-content/uploads/2024/05/photo-300x200.jpg'));
+        $this->assertStringNotContainsString('the gallery of post', $output);
+    }
+
+    public function test_the_dates_are_in_the_time_zone_of_the_new_site(): void
+    {
+        $this->runWithTheNewKindsOfPosts('Europe/Moscow');
+
+        $this->assertSame('2024-05-10 10:00:00', $this->target('post', Wp::HELLO)->active_from);
+        $this->assertSame('2024-07-01 12:00:00', $this->target('post', 450)->active_from);
+        $this->assertSame('2030-01-15 10:00:00', $this->target('post', Wp::SCHEDULED)->active_from);
     }
 
     #[DataProvider('plugins')]

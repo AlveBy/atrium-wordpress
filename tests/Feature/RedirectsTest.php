@@ -98,11 +98,230 @@ final class RedirectsTest extends TestCase
         ];
         foreach (self::PAIRS as $old => $new) {
             $lines[] = '    "'.$old.'" "'.$new.'";';
+
+            // nginx sees the address as the browser sent it, with capitals in its escapes.
+            if ($old === '/ru/2024/05/%d0%bf%d1%80%d0%b8%d0%b2%d0%b5%d1%82-%d0%bc%d0%b8%d1%80/') {
+                $lines[] = '    "/ru/2024/05/%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82-%D0%BC%D0%B8%D1%80/" "'.$new.'";';
+            }
         }
         $lines[] = '}';
 
         $this->assertSame(0, $exit);
         $this->assertSame(implode("\n", $lines)."\n", $output);
+    }
+
+    /**
+     * The lines of the nginx map for one row of the mapping table, without the frame of the map.
+     *
+     * @param  array<int,array{0:string,1:string}>  $pairs
+     * @return array<int,string>
+     */
+    private function nginxLines(array $pairs): array
+    {
+        $this->mapped('post', 5, $pairs);
+
+        return $this->mapLines();
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function mapLines(): array
+    {
+        [$exit, $output] = $this->cli('atrium:wordpress:redirects');
+
+        $this->assertSame(0, $exit);
+        $lines = explode("\n", rtrim($output, "\n"));
+        $this->assertSame('    default "";', $lines[3]);
+        $this->assertSame('}', array_pop($lines));
+
+        return array_slice($lines, 4);
+    }
+
+    public function test_nginx_also_maps_an_address_with_its_escapes_in_capitals(): void
+    {
+        $this->assertSame([
+            '    "/ru/%d0%bf%d1%80/" "/new";',
+            '    "/ru/%D0%BF%D1%80/" "/new";',
+        ], $this->nginxLines([['/ru/%d0%bf%d1%80/', '/new']]));
+    }
+
+    public function test_nginx_also_maps_an_address_with_its_escapes_in_lower_case(): void
+    {
+        $this->assertSame([
+            '    "/ru/%D0%BF%D1%80/" "/new";',
+            '    "/ru/%d0%bf%d1%80/" "/new";',
+        ], $this->nginxLines([['/ru/%D0%BF%D1%80/', '/new']]));
+    }
+
+    public function test_nginx_maps_a_mixed_address_as_it_is_then_in_capitals_then_in_lower_case(): void
+    {
+        $this->assertSame([
+            '    "/ru/%d0%BF/x" "/new";',
+            '    "/ru/%D0%BF/x" "/new";',
+            '    "/ru/%d0%bf/x" "/new";',
+        ], $this->nginxLines([['/ru/%d0%BF/x', '/new']]));
+    }
+
+    public function test_only_the_two_hex_digits_of_an_escape_change_their_case(): void
+    {
+        $this->assertSame([
+            '    "/Caf%c3%a9bad/100%/%0a%2f%5b%7e/ab" "/new";',
+            '    "/Caf%C3%A9bad/100%/%0A%2F%5B%7E/ab" "/new";',
+        ], $this->nginxLines([['/Caf%c3%a9bad/100%/%0a%2f%5b%7e/ab', '/new']]));
+    }
+
+    public function test_the_letters_after_an_escape_keep_their_case_in_the_capitals_variant(): void
+    {
+        $this->assertSame([
+            '    "/%d0%bfabc/ab" "/new";',
+            '    "/%D0%BFabc/ab" "/new";',
+        ], $this->nginxLines([['/%d0%bfabc/ab', '/new']]));
+    }
+
+    public function test_the_letters_after_an_escape_in_capitals_keep_their_case_in_the_lower_variant(): void
+    {
+        $this->assertSame([
+            '    "/%D0%BFABC/Ab" "/new";',
+            '    "/%d0%bfABC/Ab" "/new";',
+        ], $this->nginxLines([['/%D0%BFABC/Ab', '/new']]));
+    }
+
+    public function test_the_escapes_of_a_query_change_case_too(): void
+    {
+        $this->assertSame([
+            '    "/?s=%d0%bf&t=%d1%80" "/search";',
+            '    "/?s=%D0%BF&t=%D1%80" "/search";',
+        ], $this->nginxLines([['/?s=%d0%bf&t=%d1%80', '/search']]));
+    }
+
+    public function test_an_address_without_escapes_is_one_line(): void
+    {
+        $this->assertSame([
+            '    "/about/" "/about";',
+            '    "/?p=10" "/news/hello-world";',
+            '    "/100%/" "/x";',
+            '    "/50%zz/" "/y";',
+            '    "/ends%a" "/z";',
+            '    "/ru/привет/" "/w";',
+        ], $this->nginxLines([['/about/', '/about'], ['/?p=10', '/news/hello-world'], ['/100%/', '/x'], ['/50%zz/', '/y'], ['/ends%a', '/z'], ['/ru/привет/', '/w']]));
+    }
+
+    public function test_an_address_whose_escapes_have_no_letters_is_one_line(): void
+    {
+        $this->assertSame(['    "/my%20page%21/" "/new";'], $this->nginxLines([['/my%20page%21/', '/new']]));
+    }
+
+    public function test_an_address_that_is_already_a_pair_keeps_its_own_target_whichever_comes_first(): void
+    {
+        $this->assertSame([
+            '    "/%d0%bf/" "/lower";',
+            '    "/%D0%BF/" "/upper";',
+        ], $this->nginxLines([['/%d0%bf/', '/lower'], ['/%D0%BF/', '/upper']]));
+    }
+
+    public function test_an_address_that_is_already_a_pair_keeps_its_own_target_when_the_capitals_come_first(): void
+    {
+        $this->assertSame([
+            '    "/%D0%BF/" "/upper";',
+            '    "/%d0%bf/" "/lower";',
+        ], $this->nginxLines([['/%D0%BF/', '/upper'], ['/%d0%bf/', '/lower']]));
+    }
+
+    public function test_the_variant_of_a_pair_is_skipped_when_another_pair_has_that_address_even_in_another_row(): void
+    {
+        $this->mapped('post', 5, [['/%d0%bf/', '/lower']]);
+        $this->mapped('term', 6, [['/%D0%BF/', '/upper']]);
+
+        $this->assertSame([
+            '    "/%d0%bf/" "/lower";',
+            '    "/%D0%BF/" "/upper";',
+        ], $this->mapLines());
+    }
+
+    public function test_a_variant_that_two_addresses_share_is_written_once(): void
+    {
+        // The capitals of the first one and the capitals of the second one are the same address;
+        // the lower case of the second is the first, a pair of its own.
+        $this->assertSame([
+            '    "/%d0%bf/" "/first";',
+            '    "/%D0%BF/" "/first";',
+            '    "/%d0%BF/" "/second";',
+        ], $this->nginxLines([['/%d0%bf/', '/first'], ['/%d0%BF/', '/second']]));
+    }
+
+    public function test_two_mixed_addresses_give_every_address_once_and_the_first_claims_the_variants(): void
+    {
+        $lines = $this->nginxLines([['/%d0%BF/', '/x'], ['/%D0%bf/', '/y']]);
+
+        $this->assertSame([
+            '    "/%d0%BF/" "/x";',
+            '    "/%D0%BF/" "/x";',
+            '    "/%d0%bf/" "/x";',
+            '    "/%D0%bf/" "/y";',
+        ], $lines);
+    }
+
+    public function test_an_address_given_twice_is_mapped_once_with_its_variant_and_the_last_target(): void
+    {
+        $this->mapped('post', 5, [['/%d0%bf/', '/first']]);
+        $this->mapped('post', 6, [['/%d0%bf/', '/second']]);
+
+        $this->assertSame([
+            '    "/%d0%bf/" "/second";',
+            '    "/%D0%BF/" "/second";',
+        ], $this->mapLines());
+    }
+
+    public function test_the_variants_follow_their_own_address_and_the_next_address_follows_them(): void
+    {
+        $this->assertSame([
+            '    "/a%d0/" "/1";',
+            '    "/a%D0/" "/1";',
+            '    "/b/" "/2";',
+            '    "/c%d1/" "/3";',
+            '    "/c%D1/" "/3";',
+        ], $this->nginxLines([['/a%d0/', '/1'], ['/b/', '/2'], ['/c%d1/', '/3']]));
+    }
+
+    public function test_the_variants_have_their_quotes_and_backslashes_escaped_as_well(): void
+    {
+        $this->assertSame([
+            '    "/a\\"b\\\\c%d0" "/n\\"w\\\\";',
+            '    "/a\\"b\\\\c%D0" "/n\\"w\\\\";',
+        ], $this->nginxLines([['/a"b\\c%d0', '/n"w\\']]));
+    }
+
+    public function test_apache_and_csv_keep_the_address_as_it_is_and_get_no_variants(): void
+    {
+        $this->mapped('post', 5, [['/ru/%d0%bf/', '/new'], ['/?s=%d0%bf', '/search']]);
+
+        [, $apache] = $this->cli('atrium:wordpress:redirects', ['--format' => 'apache']);
+        [, $csv] = $this->cli('atrium:wordpress:redirects', ['--format' => 'csv']);
+
+        $this->assertSame("RewriteEngine On\nRewriteRule ^ru/п/$ /new [R=301,L]\nRewriteCond %{QUERY_STRING} ^s\\=%d0%bf$\nRewriteRule ^$ /search? [R=301,L]\n", $apache);
+        $this->assertSame("old,new\n\"/ru/%d0%bf/\",\"/new\"\n\"/?s=%d0%bf\",\"/search\"\n", $csv);
+    }
+
+    public function test_the_file_of_the_map_has_the_variants_and_the_count_is_of_the_addresses(): void
+    {
+        $this->mapped('post', 5, [['/ru/%d0%bf/', '/new'], ['/plain/', '/p']]);
+        $file = $this->workDir.'/redirects.conf';
+
+        [$exit, $output] = $this->cli('atrium:wordpress:redirects', ['--output' => $file]);
+
+        $this->assertSame(0, $exit);
+        $this->assertSame("2 redirects written to {$file}\n", $output);
+        $this->assertSame(implode("\n", [
+            '# In the http block; then in the server block:',
+            '#   if ($atrium_wordpress_redirect) { return 301 $atrium_wordpress_redirect; }',
+            'map $request_uri $atrium_wordpress_redirect {',
+            '    default "";',
+            '    "/ru/%d0%bf/" "/new";',
+            '    "/ru/%D0%BF/" "/new";',
+            '    "/plain/" "/p";',
+            '}',
+        ])."\n", (string) file_get_contents($file));
     }
 
     public function test_the_same_in_nginx_when_asked_for(): void

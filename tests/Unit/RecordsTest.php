@@ -120,7 +120,7 @@ final class RecordsTest extends TestCase
                 'name' => ['en' => 'Hello World', 'ru' => 'Привет, мир'],
                 'code' => ['en' => 'hello-world', 'ru' => 'privet-mir'],
                 'active' => true,
-                'active_from' => '2024-05-10 10:00:00',
+                'active_from' => '2024-05-10 07:00:00',
                 'sort' => 500,
                 'preview_picture' => '/wp-content/uploads/2024/05/photo.jpg',
                 'preview_text' => ['en' => 'A short hello.'],
@@ -208,6 +208,137 @@ final class RecordsTest extends TestCase
         $this->records = $this->records();
 
         $this->assertSame($active, $this->record('book', self::BOOK)['values']['active']);
+    }
+
+    private const PASSWORD_NOTE = 'post 450 is protected by a password; it moved unpublished so its text does not go public';
+
+    /**
+     * @return array<string,array{0:string,1:string,2:string,3:bool,4:bool}> type, status, password, active, told
+     */
+    public static function passwords(): array
+    {
+        $cases = [];
+
+        foreach (['book', 'page', 'post'] as $type) {
+            foreach ([
+                'a published one' => ['publish', 'secret', false, true],
+                'a scheduled one' => ['future', 'secret', false, true],
+                'one with a password of spaces' => ['publish', '   ', false, true],
+                'one with the password zero' => ['publish', '0', false, true],
+                'one with a one-letter password' => ['publish', 'x', false, true],
+                'a published one without a password' => ['publish', '', true, false],
+                'a scheduled one without a password' => ['future', '', true, false],
+                'a private one' => ['private', 'secret', false, false],
+                'a draft' => ['draft', 'secret', false, false],
+                'a pending one' => ['pending', 'secret', false, false],
+            ] as $name => [$status, $password, $active, $told]) {
+                $cases["{$type}: {$name}"] = [$type, $status, $password, $active, $told];
+            }
+        }
+
+        return $cases;
+    }
+
+    /**
+     * @return array<int,string> the notes about passwords
+     */
+    private function passwordNotes(): array
+    {
+        return array_values(array_filter($this->records->notes(), static fn (string $note): bool => str_contains($note, 'password')));
+    }
+
+    #[DataProvider('passwords')]
+    public function test_a_post_behind_a_password_moves_unpublished_and_is_told(string $type, string $status, string $password, bool $active, bool $told): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, $type, 'A secret', ['post_status' => $status, 'post_password' => $password, 'post_content' => 'The text.']);
+        $this->records = $this->records();
+
+        $record = $this->record($type, self::BOOK);
+
+        $this->assertSame($active, $record['values']['active']);
+        $this->assertSame($told ? [self::PASSWORD_NOTE] : [], $this->passwordNotes());
+        // The text moves all the same: it is the visitors who do not get it.
+        $this->assertSame(['en' => '<p>The text.</p>'], $record['values'][$type === 'page' ? 'content' : 'detail_text']);
+    }
+
+    public function test_a_password_is_told_once_however_often_the_records_are_read(): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, 'book', 'A secret', ['post_password' => 'secret']);
+        $this->wpPost(451, 'book', 'Another', ['post_password' => 'other']);
+        $this->wpPost(452, 'book', 'Open');
+        $this->records = $this->records();
+
+        $this->all('book');
+        $this->all('book');
+
+        $this->assertSame([self::PASSWORD_NOTE, 'post 451 is protected by a password; it moved unpublished so its text does not go public'], $this->passwordNotes());
+        $this->assertTrue($this->all('book')[452]['values']['active']);
+    }
+
+    public function test_the_password_of_one_post_does_not_hide_the_next(): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, 'book', 'A secret', ['post_password' => 'secret']);
+        $this->wpPost(451, 'book', 'Open');
+        $this->wpPost(452, 'page', 'An open page');
+        $this->records = $this->records();
+
+        $this->assertFalse($this->record('book', self::BOOK)['values']['active']);
+        $this->assertTrue($this->record('book', 451)['values']['active']);
+        $this->assertTrue($this->record('page', 452)['values']['active']);
+    }
+
+    /**
+     * @return array<string,array{0:string,1:string,2:string,3:string}> app.timezone, UTC time, local time, active_from
+     */
+    public static function moments(): array
+    {
+        return [
+            'UTC' => ['UTC', '2024-05-10 07:00:09', '2024-05-10 10:00:09', '2024-05-10 07:00:09'],
+            'Moscow, three hours ahead' => ['Europe/Moscow', '2024-05-10 07:00:09', '2024-05-10 10:00:09', '2024-05-10 10:00:09'],
+            'New York in summer, four hours behind' => ['America/New_York', '2024-05-10 07:00:09', '2024-05-10 10:00:09', '2024-05-10 03:00:09'],
+            'New York in winter, five hours behind' => ['America/New_York', '2024-12-31 22:30:00', '2025-01-01 01:30:00', '2024-12-31 17:30:00'],
+            'Moscow over midnight' => ['Europe/Moscow', '2024-12-31 22:30:00', '2025-01-01 01:30:00', '2025-01-01 01:30:00'],
+            'Kolkata, half an hour more' => ['Asia/Kolkata', '2024-05-10 07:00:00', '2024-05-10 10:00:00', '2024-05-10 12:30:00'],
+            'the UTC time wins over the local one' => ['UTC', '2024-05-10 05:00:00', '2024-05-10 10:00:00', '2024-05-10 05:00:00'],
+            'a time zone written in the date' => ['Europe/Moscow', '2024-05-10T07:00:00+0000', '2024-05-10 10:00:00', '2024-05-10 10:00:00'],
+            'a zero date, a draft with no UTC time yet' => ['Europe/Moscow', '0000-00-00 00:00:00', '2024-05-10 10:00:00', '2024-05-10 10:00:00'],
+            'a zero year' => ['Europe/Moscow', '0000-01-01 00:00:00', '2024-05-10 10:00:00', '2024-05-10 10:00:00'],
+            'an empty UTC time' => ['Europe/Moscow', '', '2024-05-10 10:00:00', '2024-05-10 10:00:00'],
+        ];
+    }
+
+    #[DataProvider('moments')]
+    public function test_a_post_is_active_from_its_utc_time_in_the_time_zone_of_the_new_site(string $zone, string $utc, string $local, string $expected): void
+    {
+        $this->site();
+        config(['app.timezone' => $zone]);
+        $this->wpPost(self::BOOK, 'book', 'A book', ['post_date' => $local, 'post_date_gmt' => $utc]);
+        $this->records = $this->records();
+        $before = date_default_timezone_get();
+        // Neither the time zone of PHP nor the one the UTC time is read in is the site's.
+        date_default_timezone_set('America/Los_Angeles');
+
+        try {
+            $this->assertSame($expected, $this->record('book', self::BOOK)['values']['active_from']);
+        } finally {
+            date_default_timezone_set($before);
+        }
+    }
+
+    public function test_a_page_has_no_date_and_the_zone_does_not_touch_the_others(): void
+    {
+        $this->site();
+        config(['app.timezone' => 'Europe/Moscow']);
+        $this->records = $this->records();
+
+        $this->assertArrayNotHasKey('active_from', $this->record('page', Wp::ABOUT)['values']);
+        $this->assertSame('2024-05-10 10:00:00', $this->record('post', Wp::HELLO)['values']['active_from']);
+        $this->assertSame('2030-01-15 10:00:00', $this->record('post', Wp::SCHEDULED)['values']['active_from']);
+        // A draft has a UTC time here too, the fixture's: the zone is applied to every post that has one.
+        $this->assertSame('2024-05-21 09:00:00', $this->record('post', Wp::DRAFT_IDEA)['values']['active_from']);
     }
 
     public function test_the_menu_order_is_the_sort_and_zero_is_the_middle(): void
@@ -1037,8 +1168,9 @@ final class RecordsTest extends TestCase
             'alt' => 'A photo of the street',
             'description' => '',
             'mime' => 'image/jpeg',
+            'parent' => Wp::HELLO,
             'sizes' => ['2024/05/photo-300x200.jpg'],
-            'date' => '2024-05-10 09:00:00',
+            'date' => '2024-05-10 06:00:00',
         ], $files[Wp::PHOTO]);
         $this->assertSame([], $files[Wp::BORSCHT_PHOTO]['sizes']);
         $this->assertSame('The printed manual.', $files[Wp::MANUAL]['description']);
@@ -1157,6 +1289,275 @@ final class RecordsTest extends TestCase
             'the lid points at attachment 777, which is not in the database',
             'the box points at attachment 52, whose file 2024/07/missing.jpg is missing in the uploads folder',
         ], $this->notes());
+    }
+
+    #[DataProvider('moments')]
+    public function test_a_file_is_dated_by_its_utc_time_in_the_time_zone_of_the_new_site(string $zone, string $utc, string $local, string $expected): void
+    {
+        $this->site();
+        config(['app.timezone' => $zone]);
+        $this->wp()->table('wp_posts')->where('ID', Wp::PHOTO)->update(['post_date' => $local, 'post_date_gmt' => $utc]);
+        $this->records = $this->records();
+        $before = date_default_timezone_get();
+        date_default_timezone_set('America/Los_Angeles');
+
+        try {
+            $this->assertSame($expected, $this->records->attachments()[Wp::PHOTO]['date']);
+        } finally {
+            date_default_timezone_set($before);
+        }
+    }
+
+    public function test_the_parent_of_an_attachment_is_the_post_it_was_uploaded_to(): void
+    {
+        $this->load();
+
+        $this->assertSame(
+            [Wp::PHOTO => Wp::HELLO, Wp::BORSCHT_PHOTO => Wp::BORSCHT, Wp::MISSING_PHOTO => Wp::PIZZA, Wp::MANUAL => 0],
+            array_map(static fn (array $file): int => $file['parent'], $this->records->attachments()),
+        );
+    }
+
+    // Galleries and captions.
+
+    /**
+     * An attachment of the made-up site, its file in the uploads folder unless told otherwise.
+     */
+    private function picture(int $id, int $parent, string $mime = 'image/jpeg', ?string $alt = null, bool $file = true): void
+    {
+        $path = "gallery/pic-{$id}.jpg";
+        $this->wpPost($id, 'attachment', "Pic {$id}", ['post_status' => 'inherit', 'post_parent' => $parent, 'post_mime_type' => $mime, 'guid' => Wp::OLD_URL.'/wp-content/uploads/'.$path]);
+        $this->wpMeta($id, array_filter(['_wp_attached_file' => $path, '_wp_attachment_image_alt' => $alt], static fn (?string $value): bool => $value !== null));
+
+        if ($file) {
+            @mkdir(dirname($this->workDir.'/uploads/'.$path), 0777, true);
+            file_put_contents($this->workDir.'/uploads/'.$path, 'synthetic-'.$id);
+        }
+    }
+
+    private function figure(int $id, string $alt = ''): string
+    {
+        return '<figure><img src="/wp-content/uploads/gallery/pic-'.$id.'.jpg" alt="'.$alt.'"></figure>';
+    }
+
+    /**
+     * The English text of a book whose content is the given one.
+     */
+    private function textOf(string $content): ?string
+    {
+        $this->wpPost(self::BOOK, 'book', 'A book', ['post_content' => $content]);
+        $this->records = $this->records();
+
+        return $this->record('book', self::BOOK)['values']['detail_text']['en'] ?? null;
+    }
+
+    public function test_a_gallery_without_ids_shows_the_pictures_attached_to_the_post_in_the_order_of_their_ids(): void
+    {
+        $this->site();
+        // Added out of order on purpose.
+        $this->picture(462, self::BOOK, alt: 'Third');
+        $this->picture(460, self::BOOK, alt: 'First');
+        $this->picture(461, self::BOOK);
+
+        $this->assertSame(
+            "<p>Before</p>\n".$this->figure(460, 'First').$this->figure(461).$this->figure(462, 'Third')."\n<p>After</p>",
+            $this->textOf("Before\n\n[gallery]\n\nAfter"),
+        );
+        $this->assertSame([], $this->notes());
+    }
+
+    public function test_a_gallery_without_ids_leaves_out_what_is_not_a_picture_of_this_post(): void
+    {
+        $this->site();
+        $this->picture(460, self::BOOK);
+        $this->picture(461, self::BOOK, 'application/pdf');
+        $this->picture(462, 451);
+        $this->picture(463, self::BOOK, 'video/mp4');
+        $this->picture(464, self::BOOK, 'application/image/png');
+        $this->picture(465, self::BOOK, '');
+        $this->picture(466, 0);
+        $this->picture(467, self::BOOK, 'image/png');
+        $this->picture(468, self::BOOK, 'Image/png');
+
+        $this->assertSame($this->figure(460)."\n".$this->figure(467), $this->textOf('[gallery]'));
+        $this->assertSame([], $this->notes());
+    }
+
+    public function test_a_gallery_without_ids_and_without_pictures_is_nothing(): void
+    {
+        $this->site();
+        $this->picture(461, self::BOOK, 'application/pdf');
+
+        $this->assertSame("<p>Before</p>\n<p>After</p>", $this->textOf("Before\n\n[gallery]\n\nAfter"));
+        $this->assertSame([], $this->notes());
+    }
+
+    public function test_a_post_that_is_only_an_empty_gallery_has_no_text(): void
+    {
+        $this->site();
+
+        $this->assertNull($this->textOf('[gallery]'));
+    }
+
+    public function test_a_gallery_with_ids_shows_those_attachments_in_the_order_given_whoever_they_belong_to(): void
+    {
+        $this->site();
+        $this->picture(460, 0, alt: 'Of nobody');
+        $this->picture(461, 999, alt: 'Of a post that is gone');
+        // Not attached to the post, and not named: left out.
+        $this->picture(462, self::BOOK);
+
+        $this->assertSame(
+            $this->figure(461, 'Of a post that is gone')."\n".$this->figure(460, 'Of nobody')."\n".'<figure><img src="/wp-content/uploads/2024/05/photo.jpg" alt="A photo of the street"></figure>',
+            $this->textOf('[gallery ids="461, 460,50"]'),
+        );
+        $this->assertSame([], $this->notes());
+    }
+
+    public function test_a_gallery_with_ids_leaves_out_what_is_not_a_picture_even_when_named(): void
+    {
+        $this->site();
+        $this->picture(460, self::BOOK, alt: 'Kept');
+        $this->picture(461, self::BOOK, 'application/pdf');
+        $this->picture(462, self::BOOK, 'video/mp4');
+        $this->picture(463, self::BOOK, '');
+        $this->picture(464, self::BOOK, 'application/image/png');
+        $this->picture(465, self::BOOK, 'Image/png');
+        $this->picture(466, self::BOOK, 'image/png', 'Also kept');
+
+        $this->assertSame(
+            $this->figure(460, 'Kept').$this->figure(466, 'Also kept'),
+            str_replace("\n", '', (string) $this->textOf('[gallery ids="461,460,462,463,464,465,466"]')),
+        );
+        $this->assertSame([], $this->notes());
+    }
+
+    public function test_a_gallery_with_only_non_pictures_named_is_nothing(): void
+    {
+        $this->site();
+        $this->picture(461, self::BOOK, 'application/pdf');
+
+        $this->assertNull($this->textOf('[gallery ids="461"]'));
+    }
+
+    public function test_a_gallery_still_says_a_file_or_attachment_is_missing_when_it_is_not_a_picture(): void
+    {
+        $this->site();
+        $this->picture(461, self::BOOK, 'application/pdf', file: false);
+        $this->picture(462, self::BOOK, 'application/pdf');
+
+        // Named: the PDF whose file is gone is told, the one that is there is skipped quietly.
+        $this->assertNull($this->textOf('[gallery ids="461,462,999"]'));
+        $this->assertSame([
+            'the gallery of post 450 points at attachment 461, whose file gallery/pic-461.jpg is missing in the uploads folder',
+            'the gallery of post 450 points at attachment 999, which is not in the database',
+        ], $this->notes());
+    }
+
+    public function test_a_gallery_without_ids_tells_of_a_missing_file_of_an_attachment_of_the_post_whatever_its_type(): void
+    {
+        $this->site();
+        $this->picture(461, self::BOOK, 'application/pdf', file: false);
+        $this->picture(462, self::BOOK, file: false);
+        $this->picture(463, self::BOOK, alt: 'There');
+
+        $this->assertSame($this->figure(463, 'There'), $this->textOf('[gallery]'));
+        $this->assertSame([
+            'the gallery of post 450 points at attachment 461, whose file gallery/pic-461.jpg is missing in the uploads folder',
+            'the gallery of post 450 points at attachment 462, whose file gallery/pic-462.jpg is missing in the uploads folder',
+        ], $this->notes());
+    }
+
+    public function test_a_gallery_skips_an_attachment_that_is_not_there_or_has_no_file_and_says_so(): void
+    {
+        $this->site();
+        $this->picture(460, 0, alt: 'Here');
+
+        $this->assertSame(
+            $this->figure(460, 'Here'),
+            $this->textOf('[gallery ids="999,460,52"]'),
+        );
+        $this->assertSame([
+            'the gallery of post 450 points at attachment 999, which is not in the database',
+            'the gallery of post 450 points at attachment 52, whose file 2024/07/missing.jpg is missing in the uploads folder',
+        ], $this->notes());
+    }
+
+    public function test_a_gallery_of_nothing_that_is_there_is_nothing(): void
+    {
+        $this->site();
+
+        $this->assertSame("<p>A</p>\n<p>B</p>", $this->textOf("A\n\n[gallery ids=\"999,52\"]\n\nB"));
+        $this->assertCount(2, $this->notes());
+    }
+
+    public function test_a_gallery_problem_is_told_for_each_post_that_has_it_and_once_for_each(): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, 'book', 'A book', ['post_content' => '[gallery ids="999"] [gallery ids="999"]']);
+        $this->wpPost(451, 'book', 'Another', ['post_content' => '[gallery ids="999"]']);
+        $this->records = $this->records();
+
+        $this->all('book');
+        $this->all('book');
+
+        $this->assertSame([
+            'the gallery of post 450 points at attachment 999, which is not in the database',
+            'the gallery of post 451 points at attachment 999, which is not in the database',
+        ], $this->notes());
+    }
+
+    public function test_a_gallery_is_made_in_every_language_from_the_pictures_of_the_post_of_that_language(): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, 'book', 'A book', ['post_content' => 'Pictures: [gallery]']);
+        $this->wpPost(451, 'book', 'Книга', ['post_content' => 'Картинки: [gallery]']);
+        $this->wp()->table('wp_icl_translations')->insert([
+            ['element_type' => 'post_book', 'element_id' => 450, 'trid' => 7000, 'language_code' => 'en'],
+            ['element_type' => 'post_book', 'element_id' => 451, 'trid' => 7000, 'language_code' => 'ru'],
+        ]);
+        $this->picture(460, 450);
+        $this->picture(461, 451);
+        $this->records = $this->records();
+
+        $this->assertSame([
+            'en' => '<p>Pictures:</p>'.$this->figure(460),
+            'ru' => '<p>Картинки:</p>'.$this->figure(461),
+        ], $this->record('book', self::BOOK)['values']['detail_text']);
+    }
+
+    public function test_the_files_of_a_gallery_are_listed_with_the_files_of_the_text(): void
+    {
+        $this->site();
+        $this->picture(460, self::BOOK);
+
+        $this->textOf('[gallery]');
+
+        $this->assertSame(['gallery/pic-460.jpg'], $this->record('book', self::BOOK)['files']);
+    }
+
+    public function test_a_caption_is_a_figure_with_a_figcaption(): void
+    {
+        $this->site();
+        $text = '[caption id="attachment_50" align="alignnone" width="300"]<img src="'.Wp::OLD_URL.'/wp-content/uploads/2024/05/photo-300x200.jpg" alt="Street"> The street at noon[/caption]';
+
+        $this->assertSame(
+            '<figure><img src="/wp-content/uploads/2024/05/photo-300x200.jpg" alt="Street"><figcaption>The street at noon</figcaption></figure>',
+            $this->textOf($text),
+        );
+        $this->assertSame(['2024/05/photo-300x200.jpg'], $this->record('book', self::BOOK)['files']);
+    }
+
+    public function test_a_caption_in_a_page_is_a_figure_in_its_content(): void
+    {
+        $this->site();
+        $this->wpPost(self::BOOK, 'page', 'A page', ['post_content' => 'Look: [caption]<img src="/wp-content/uploads/a.jpg"> Nice[/caption]']);
+        $this->records = $this->records();
+
+        $this->assertSame(
+            ['en' => '<p>Look:</p><figure><img src="/wp-content/uploads/a.jpg"><figcaption>Nice</figcaption></figure>'],
+            $this->record('page', self::BOOK)['values']['content'],
+        );
     }
 
     public function test_the_uploads_folder_may_end_in_a_slash(): void

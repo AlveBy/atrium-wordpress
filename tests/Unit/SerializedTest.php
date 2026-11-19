@@ -159,6 +159,88 @@ final class SerializedTest extends TestCase
         $this->assertFalse(Serialized::wasRepaired(''));
     }
 
+    public function test_a_value_serialized_twice_is_decoded_to_the_value(): void
+    {
+        $this->assertSame('abc', Serialized::decode(serialize(serialize('abc'))));
+        $this->assertSame(5, Serialized::decode(serialize(serialize(5))));
+        $this->assertSame(1.5, Serialized::decode(serialize(serialize(1.5))));
+        $this->assertTrue(Serialized::decode(serialize(serialize(true))));
+        $this->assertNull(Serialized::decode(serialize(serialize(null))));
+        // A false inside is still a value, not a failure.
+        $this->assertFalse(Serialized::decode(serialize(serialize(false))));
+    }
+
+    public function test_an_array_serialized_twice_is_the_array(): void
+    {
+        $value = ['a', 'b' => ['c' => 1, 'd' => 'text with "quotes"; and: more']];
+
+        $this->assertSame($value, Serialized::decode(serialize(serialize($value))));
+        $this->assertSame($value, Serialized::toArray(serialize(serialize($value))));
+        $this->assertSame([], Serialized::decode(serialize(serialize([]))));
+    }
+
+    public function test_every_layer_of_a_value_serialized_again_and_again_is_taken_off(): void
+    {
+        $this->assertSame('abc', Serialized::decode(serialize(serialize(serialize('abc')))));
+        $this->assertSame(['x' => 1], Serialized::decode(serialize(serialize(serialize(serialize(['x' => 1]))))));
+    }
+
+    public function test_a_string_that_is_not_serialized_inside_a_serialized_one_stays_a_string(): void
+    {
+        $this->assertSame('hello', Serialized::decode(serialize('hello')));
+        $this->assertSame('', Serialized::decode(serialize('')));
+        $this->assertSame('42', Serialized::decode(serialize('42')));
+        $this->assertSame('text i:5;', Serialized::decode(serialize('text i:5;')));
+        $this->assertSame(' i:5;', Serialized::decode(serialize(' i:5;')));
+    }
+
+    public function test_a_string_inside_that_looks_serialized_but_is_broken_stays_a_string(): void
+    {
+        $this->assertSame('a:1:{garbage', Serialized::decode(serialize('a:1:{garbage')));
+        $this->assertSame('s:5:"abc', Serialized::decode(serialize('s:5:"abc')));
+        $this->assertSame('a:1:{', Serialized::decode(serialize('a:1:{')));
+        $this->assertSame('i:;', Serialized::decode(serialize('i:;')));
+        $this->assertSame(['a:1:{garbage'], Serialized::toArray(serialize('a:1:{garbage')));
+    }
+
+    public function test_a_layer_inside_that_needs_the_repair_is_repaired(): void
+    {
+        $this->assertSame(['vegan', 'quick'], Serialized::decode(serialize(SyntheticWordPress::BROKEN_LABELS)));
+        $this->assertSame(['vegan', 'quick'], Serialized::decode(serialize(serialize(SyntheticWordPress::BROKEN_LABELS))));
+    }
+
+    public function test_a_layer_outside_that_needs_the_repair_is_repaired_and_the_one_inside_read(): void
+    {
+        // The length of the outer string is wrong; the inner value is a plain one.
+        $this->assertSame(5, Serialized::decode('s:9:"i:5;";'));
+        $this->assertSame('abc', Serialized::decode('s:99:"s:3:"abc";";'));
+    }
+
+    public function test_a_value_serialized_twice_is_neither_broken_nor_repaired(): void
+    {
+        $twice = serialize(serialize(['a', 'b']));
+
+        $this->assertFalse(Serialized::isBroken($twice));
+        $this->assertFalse(Serialized::wasRepaired($twice));
+        $this->assertFalse(Serialized::isBroken(serialize(serialize('abc'))));
+        $this->assertFalse(Serialized::wasRepaired(serialize(serialize('abc'))));
+        $this->assertFalse(Serialized::isBroken(serialize(serialize(serialize(5)))));
+        $this->assertFalse(Serialized::wasRepaired(serialize(serialize(serialize(5)))));
+    }
+
+    public function test_a_value_serialized_twice_with_a_broken_string_inside_is_not_broken_either(): void
+    {
+        // What comes out is the inner string, which is not what went in.
+        $this->assertFalse(Serialized::isBroken(serialize('a:1:{garbage')));
+        $this->assertFalse(Serialized::wasRepaired(serialize('a:1:{garbage')));
+    }
+
+    public function test_the_repair_of_the_outer_layer_of_a_value_serialized_twice_is_told(): void
+    {
+        $this->assertTrue(Serialized::wasRepaired('s:9:"i:5;";'));
+        $this->assertFalse(Serialized::isBroken('s:9:"i:5;";'));
+    }
+
     public function test_no_object_is_ever_made(): void
     {
         $value = Serialized::decode(serialize(new Sleeper));

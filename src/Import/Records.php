@@ -16,6 +16,7 @@ use Atrium\WordPress\Plan\Type;
 use Atrium\WordPress\Support\Serialized;
 use Atrium\WordPress\Support\Text;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -321,8 +322,9 @@ final class Records
                 'alt' => $this->content->text($meta[$id]['_wp_attachment_image_alt'] ?? ''),
                 'description' => $this->content->text($post->post_content),
                 'mime' => $post->post_mime_type,
+                'parent' => (int) $post->post_parent,
                 'sizes' => array_values(array_unique($sizes)),
-                'date' => $post->post_date,
+                'date' => $this->moment($post),
             ];
         }
 
@@ -359,6 +361,33 @@ final class Records
     }
 
     /**
+     * The pictures of a [gallery]: the attachments it names, or the ones
+     * attached to the post that has it.
+     *
+     * @param  array<int,int>  $ids
+     * @return array<int,array{url:string,alt:string}>
+     */
+    private function gallery(array $ids, int $post): array
+    {
+        $attachments = $this->attachments();
+
+        if ($ids === []) {
+            $ids = array_keys(array_filter($attachments, static fn (array $attachment): bool => $attachment['parent'] === $post));
+        }
+
+        $images = [];
+
+        foreach ($ids as $id) {
+            // A gallery shows pictures: a PDF named in it would be a broken <img>.
+            if (($url = $this->attachmentUrl($id, "the gallery of post {$post}")) !== null && str_starts_with((string) $attachments[$id]['mime'], 'image/')) {
+                $images[] = ['url' => $url, 'alt' => $attachments[$id]['alt']];
+            }
+        }
+
+        return $images;
+    }
+
+    /**
      * The address of a record on the new site: /{prefix}/{code}, behind
      * /{language} for every language but the default one.
      */
@@ -388,7 +417,7 @@ final class Records
             $row = $posts[$id];
             $name[$language] = $this->content->text($row->post_title) ?: 'Untitled '.$id;
             $excerpt[$language] = $this->content->text($row->post_excerpt);
-            $text[$language] = $this->content->html($row->post_content);
+            $text[$language] = $this->content->html($row->post_content, fn (array $ids): array => $this->gallery($ids, $id));
             $files = [...$files, ...Content::referencedUploads($text[$language])];
 
             if (($old = $this->permalinks->post($row, $language)) !== null) {
@@ -409,6 +438,13 @@ final class Records
         }
 
         $active = in_array($post->post_status, ['publish', 'future'], true);
+
+        if ($active && (string) ($post->post_password ?? '') !== '') {
+            // WordPress shows such a post's title and hides its text behind the password; Atrium has no such gate.
+            $active = false;
+            $this->note("password:{$main}", "post {$main} is protected by a password; it moved unpublished so its text does not go public");
+        }
+
         $sort = (int) $post->menu_order === 0 ? 500 : (int) $post->menu_order;
         $code = $index['codes'][$main];
         $lost = [];
@@ -427,7 +463,7 @@ final class Records
                 'name' => $name,
                 'code' => $code,
                 'active' => $active,
-                'active_from' => $post->post_date,
+                'active_from' => $this->moment($post),
                 'sort' => $sort,
                 'preview_picture' => $thumbnail,
                 'preview_text' => $this->translations($excerpt),
@@ -810,6 +846,22 @@ final class Records
         });
 
         return $files;
+    }
+
+    /**
+     * When the post was published, in the new site's time zone. WordPress
+     * keeps it twice: as the wall clock of the site and in UTC; drafts have
+     * no UTC time yet.
+     */
+    private function moment(object $post): string
+    {
+        $utc = (string) ($post->post_date_gmt ?? '');
+
+        if ($utc === '' || str_starts_with($utc, '0000')) {
+            return (string) $post->post_date;
+        }
+
+        return Carbon::parse($utc, 'UTC')->setTimezone((string) config('app.timezone'))->format('Y-m-d H:i:s');
     }
 
     private function note(string $key, string $text): void

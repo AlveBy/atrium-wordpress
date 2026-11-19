@@ -37,13 +37,16 @@ final class Serialized
 
         [$ok, $decoded] = self::attempt($value);
 
-        if ($ok) {
-            return $decoded;
+        if (! $ok) {
+            [$ok, $decoded] = self::attempt(self::repair($value));
         }
 
-        [$ok, $decoded] = self::attempt(self::repair($value));
+        if (! $ok) {
+            return $value;
+        }
 
-        return $ok ? $decoded : $value;
+        // Saved through update_post_meta() with a value that was already serialized: a second layer.
+        return is_string($decoded) && self::looksSerialized($decoded) ? self::decode($decoded) : $decoded;
     }
 
     /**

@@ -71,13 +71,34 @@ final class RedirectsCommand extends Command
             '    default "";',
         ];
 
+        // $request_uri is matched as the browser sent it: %D0%BF… in capitals, where WordPress keeps %d0%bf….
+        $rows = [];
+
         foreach ($pairs as $old => $new) {
-            $lines[] = '    "'.addcslashes($old, '"\\').'" "'.addcslashes($new, '"\\').'";';
+            foreach ([$old, $this->hex($old, 'strtoupper'), $this->hex($old, 'strtolower')] as $key) {
+                if ($key === $old || ! isset($pairs[$key])) {
+                    $rows[$key] ??= $new;
+                }
+            }
+        }
+
+        foreach ($rows as $old => $new) {
+            $lines[] = '    "'.addcslashes((string) $old, '"\\').'" "'.addcslashes($new, '"\\').'";';
         }
 
         $lines[] = '}';
 
         return implode("\n", $lines)."\n";
+    }
+
+    /**
+     * The address with the hex digits of its %XX escapes in one case.
+     *
+     * @param  'strtoupper'|'strtolower'  $case
+     */
+    private function hex(string $path, string $case): string
+    {
+        return (string) preg_replace_callback('/%[0-9a-f]{2}/i', static fn (array $m): string => $case($m[0]), $path);
     }
 
     /**
