@@ -304,7 +304,7 @@ final class MigrateDataTest extends TestCase
         $this->assertSame(0, $exit);
         $this->assertEquals($first, $this->snapshot());
         $this->assertSame($hello, $this->target('post', Wp::HELLO)->id);
-        $this->assertSame(27, DB::table('wordpress_map')->count());
+        $this->assertSame(28, DB::table('wordpress_map')->count());
         $this->assertSame(2, DB::table('admin_languages')->count());
     }
 
@@ -381,7 +381,7 @@ final class MigrateDataTest extends TestCase
 
         $this->assertSame(0, $exit);
         $this->assertMatchesRegularExpression('/\| posts:post\s+\| 8\s+\|/', $output);
-        $this->assertSame(27, DB::table('wordpress_map')->count());
+        $this->assertSame(28, DB::table('wordpress_map')->count());
     }
 
     public function test_the_page_tree_is_set_again_even_when_only_a_child_changed(): void
@@ -482,7 +482,7 @@ final class MigrateDataTest extends TestCase
         $this->assertSame(0, $exit);
         $this->assertSame(8, DB::table('news')->count());
         $this->assertSame(2, DB::table('authors')->count());
-        $this->assertSame(27, DB::table('wordpress_map')->count());
+        $this->assertSame(28, DB::table('wordpress_map')->count());
     }
 
     public function test_a_failed_chunk_does_not_undo_the_chunks_before_it(): void

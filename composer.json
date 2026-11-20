@@ -26,6 +26,7 @@
         "illuminate/support": "^13.0"
     },
     "require-dev": {
+        "alveby/atrium-menus": "^0.1",
         "alveby/atrium-news": "^0.1",
         "alveby/atrium-pages": "^0.1",
         "alveby/atrium-theme": "^0.1",
@@ -33,6 +34,7 @@
         "phpunit/phpunit": "^12.5"
     },
     "suggest": {
+        "alveby/atrium-menus": "Menus move with their items",
         "alveby/atrium-news": "Posts become news",
         "alveby/atrium-pages": "Pages become pages, with their tree"
     },

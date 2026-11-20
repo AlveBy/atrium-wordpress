@@ -12,7 +12,11 @@ namespace Atrium\WordPress\Import;
 use Atrium\Admin\Models\Language;
 use Atrium\Admin\Models\MediaCollection;
 use Atrium\Admin\Models\MediaItem;
+use Atrium\Admin\Support\RecordUrls;
 use Atrium\Admin\Support\Sites;
+use Atrium\Menus\Menus;
+use Atrium\Menus\Models\Menu;
+use Atrium\Menus\Models\MenuItem;
 use Atrium\WordPress\Plan\Taxonomy;
 use Atrium\WordPress\Plan\Type;
 use Illuminate\Database\Eloquent\Model;
@@ -25,7 +29,7 @@ use RuntimeException;
 /**
  * Writes what Records says into Atrium: languages, authors, terms, files,
  * then the records of every post type with their links, SEO and old
- * addresses. Every chunk is one transaction, retried on a deadlock; files
+ * addresses, then the menus when the menus module is there. Every chunk is one transaction, retried on a deadlock; files
  * are copied before, never inside one. Running it again updates what it
  * wrote before instead of adding copies.
  */
@@ -76,6 +80,8 @@ final class Importer
             $this->type($type, $onlyChanged);
         }
 
+        $this->menus();
+
         return ['counts' => $this->counts, 'missing_files' => $this->missingFiles, 'notes' => $this->records->notes()];
     }
 
@@ -120,6 +126,28 @@ final class Importer
                 }
             }, attempts: 3);
         }
+
+        return $gone->count() + $this->pruneMenus();
+    }
+
+    /**
+     * Deletes the menus that are no longer in WordPress, with their items.
+     */
+    private function pruneMenus(): int
+    {
+        if (! Navigation::installed()) {
+            return 0;
+        }
+
+        $keep = array_column((new Navigation($this->records))->menus(), 'id');
+        $gone = DB::table('wordpress_map')->where('kind', 'menu')->whereNotIn('wp_id', $keep)->get();
+
+        DB::transaction(function () use ($gone): void {
+            foreach ($gone as $row) {
+                Menu::query()->withoutGlobalScopes()->find($row->target_id)?->delete();
+                DB::table('wordpress_map')->where('id', $row->id)->delete();
+            }
+        }, attempts: 3);
 
         return $gone->count();
     }
@@ -298,6 +326,168 @@ final class Importer
         }
 
         $this->counts['posts:'.$type->type] = $written;
+    }
+
+    /**
+     * The menus, and their items as trees, into the menus module. Without
+     * it they are left behind with a note, not a failure. A menu moved before
+     * gets its items written again: WordPress is still the master until the
+     * switch.
+     */
+    private function menus(): void
+    {
+        $menus = (new Navigation($this->records))->menus();
+
+        if ($menus === []) {
+            return;
+        }
+
+        if (! Navigation::installed()) {
+            $this->records->note('menus', count($menus).' menus were not moved: install the menus module (alveby/atrium-menus), run its migration and move again');
+
+            return;
+        }
+
+        $items = 0;
+
+        foreach ($menus as $menu) {
+            DB::transaction(function () use ($menu, &$items): void {
+                $items += $this->writeMenu($menu);
+            }, attempts: 3);
+        }
+
+        // Pages draw the menus from a cache that only a save of a menu empties.
+        app(Menus::class)->flush();
+
+        $this->counts['menus'] = count($menus);
+        $this->counts['menu items'] = $items;
+    }
+
+    /**
+     * @param  array{id:int,name:string,code:string,language:?string,items:array<int,array<string,mixed>>}  $menu
+     */
+    private function writeMenu(array $menu): int
+    {
+        $target = $this->targetOf('menu', $menu['id']);
+        $model = ($target === null ? null : Menu::query()->withoutGlobalScopes()->find($target)) ?? new Menu;
+        $code = $this->menuCode($menu['code'], $menu['language'], $model);
+
+        if ($code !== $menu['code']) {
+            $this->records->note("menu-code:{$menu['id']}", "the menu \"{$menu['name']}\" is called {$code}: a menu with the code {$menu['code']} is already there");
+        }
+
+        $this->fill($model, ['site_id' => $this->site, 'language' => $menu['language'], 'code' => $code, 'name' => mb_substr($menu['name'], 0, 255), 'active' => true]);
+        MenuItem::query()->where('menu_id', $model->getKey())->delete();
+        $this->remember('menu', 'nav_menu', $menu['id'], $model, [], null);
+
+        $sorts = [];
+
+        return $this->writeItems((int) $model->getKey(), $menu['items'], null, 1, $menu, $sorts);
+    }
+
+    /**
+     * A menu's code is unique among the menus of its language, and of every
+     * language when it has none.
+     */
+    private function menuCode(string $base, ?string $language, Model $own): string
+    {
+        $code = $base;
+
+        for ($number = 2; $this->codeTaken($code, $language, $own); $number++) {
+            $code = $base.'-'.$number;
+        }
+
+        return $code;
+    }
+
+    private function codeTaken(string $code, ?string $language, Model $own): bool
+    {
+        return Menu::query()->withoutGlobalScopes()->where('site_id', $this->site)->where('code', $code)
+            ->when($language === null, static fn ($query) => $query->whereNull('language'), static fn ($query) => $query->where('language', $language))
+            ->when($own->exists, static fn ($query) => $query->whereKeyNot($own->getKey()))
+            ->exists();
+    }
+
+    /**
+     * @param  array<int,array<string,mixed>>  $items
+     * @param  array{id:int,name:string,code:string,language:?string,items:array<int,array<string,mixed>>}  $menu
+     * @param  array<int,int>  $sorts  the last sort of each parent's items
+     */
+    private function writeItems(int $menuId, array $items, ?int $parent, int $depth, array $menu, array &$sorts): int
+    {
+        $written = 0;
+
+        foreach ($items as $item) {
+            $link = $this->menuLink($item['link'], $menu['language']);
+
+            if ($item['link'] !== null && $link === null) {
+                $this->records->note("menu-item-record:{$item['id']}", "menu item {$item['id']} links to a record that was not moved; it became a heading");
+            }
+
+            $row = MenuItem::query()->create([
+                'menu_id' => $menuId,
+                'parent_id' => $parent,
+                'sort' => $sorts[$parent ?? 0] = ($sorts[$parent ?? 0] ?? 0) + 10,
+                'title' => mb_substr($item['title'], 0, 255),
+                'url' => $link['url'] ?? null,
+                'linkable_type' => $link['type'] ?? null,
+                'linkable_id' => $link['id'] ?? null,
+                'target' => $item['target'],
+                'active' => $item['active'],
+            ]);
+
+            // The module draws this deep and no deeper: what is below sits at the last level.
+            $below = $depth >= Menu::MAX_DEPTH ? $parent : $row->id;
+
+            if ($item['children'] !== [] && $depth >= Menu::MAX_DEPTH) {
+                $this->records->note("menu-depth:{$menu['id']}", "the menu \"{$menu['name']}\" is deeper than ".Menu::MAX_DEPTH.' levels: the items below the last level moved up to it');
+            }
+
+            $written += 1 + $this->writeItems($menuId, $item['children'], $below, $depth + 1, $menu, $sorts);
+        }
+
+        return $written;
+    }
+
+    /**
+     * The address or the record an item goes to in Atrium. A record whose
+     * module has no pages is linked by its new address instead.
+     *
+     * @param  array<string,mixed>|null  $link
+     * @return array{url?:string,type?:string,id?:int}|null
+     */
+    private function menuLink(?array $link, ?string $language): ?array
+    {
+        if ($link === null) {
+            return null;
+        }
+
+        if ($link['kind'] === 'url') {
+            return ['url' => $link['url']];
+        }
+
+        $row = DB::table('wordpress_map')->where('kind', $link['kind'])->where('wp_id', $link['id'])->first();
+
+        if ($row === null) {
+            return null;
+        }
+
+        if (app(RecordUrls::class)->hasPages($row->target_type)) {
+            return ['type' => $row->target_type, 'id' => $row->target_id];
+        }
+
+        $paths = (array) json_decode((string) $row->paths, true);
+        $language ??= $this->records->plan->languages->default();
+
+        foreach ($paths as [, $new]) {
+            $isOther = preg_match('#^/([a-z]{2}(?:-[a-z0-9]+)?)/#', (string) $new, $match) === 1 && in_array($match[1], $this->records->plan->languages->codes(), true);
+
+            if (($language === $this->records->plan->languages->default()) !== $isOther) {
+                return ['url' => $new];
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -10,7 +10,10 @@ declare(strict_types=1);
 namespace Atrium\WordPress\Parity;
 
 use Atrium\Admin\Models\MediaItem;
+use Atrium\Menus\Models\Menu;
+use Atrium\Menus\Models\MenuItem;
 use Atrium\WordPress\Import\Content;
+use Atrium\WordPress\Import\Navigation;
 use Atrium\WordPress\Import\Records;
 use Atrium\WordPress\Plan\Taxonomy;
 use Atrium\WordPress\Plan\Type;
@@ -68,6 +71,8 @@ final class Audit
 
             $this->type($type);
         }
+
+        $this->menus();
 
         return $this->result();
     }
@@ -175,6 +180,94 @@ final class Audit
         }
 
         $this->count($scope, count($expected), $found, $before);
+    }
+
+    /**
+     * Every menu with its items in their order and their depth, and what each
+     * item links to. Without the menus module the menus are a warning.
+     */
+    private function menus(): void
+    {
+        $menus = (new Navigation($this->records))->menus();
+
+        if ($menus === []) {
+            return;
+        }
+
+        if (! Navigation::installed()) {
+            $this->warnings[] = count($menus).' menus are not moved: the menus module is not installed';
+
+            return;
+        }
+
+        $map = $this->map('menu');
+        $before = count($this->problems);
+        $found = $items = $itemsFound = $itemProblems = 0;
+
+        foreach ($menus as $menu) {
+            $flat = $this->flatten($menu['items'], 1);
+            $items += count($flat);
+            $model = isset($map[$menu['id']]) ? Menu::query()->withoutGlobalScopes()->find($map[$menu['id']]->target_id) : null;
+
+            if ($model === null) {
+                $this->problem('menus', $menu['id'], 'record', 'moved', null);
+
+                continue;
+            }
+
+            $found++;
+            $this->same('menus', $menu['id'], 'name', mb_substr($menu['name'], 0, 255), $model->name);
+            $this->same('menus', $menu['id'], 'language', $menu['language'], $model->language);
+
+            $actual = $this->menuItems($model);
+            $itemsFound += count($actual);
+            $beforeItems = count($this->problems);
+            $this->same('menus', $menu['id'], 'items', $flat, $actual);
+            $itemProblems += count($this->problems) - $beforeItems;
+        }
+
+        $this->count('menus', count($menus), $found, $before);
+        $this->summary['menu items'] = ['wordpress' => $items, 'atrium' => $itemsFound, 'problems' => $itemProblems];
+    }
+
+    /**
+     * The items of a menu as the module draws them: one after another, with
+     * the level each sits on.
+     *
+     * @return array<int,array{title:string,depth:int}>
+     */
+    private function menuItems(Menu $menu): array
+    {
+        $byParent = $menu->items->groupBy(static fn (MenuItem $item): int => (int) $item->parent_id);
+        $flat = [];
+        $walk = static function (int $parent, int $depth) use (&$walk, &$flat, $byParent): void {
+            foreach ($byParent->get($parent, []) as $item) {
+                $flat[] = ['title' => $item->title, 'depth' => $depth];
+                $walk((int) $item->getKey(), $depth + 1);
+            }
+        };
+        $walk(0, 1);
+
+        return $flat;
+    }
+
+    /**
+     * The items of the menu as the importer writes them: the levels below the
+     * last one the module draws sit on it.
+     *
+     * @param  array<int,array<string,mixed>>  $items
+     * @return array<int,array{title:string,depth:int}>
+     */
+    private function flatten(array $items, int $depth): array
+    {
+        $flat = [];
+
+        foreach ($items as $item) {
+            $flat[] = ['title' => mb_substr($item['title'], 0, 255), 'depth' => $depth];
+            array_push($flat, ...$this->flatten($item['children'], min($depth + 1, Menu::MAX_DEPTH)));
+        }
+
+        return $flat;
     }
 
     private function files(): void

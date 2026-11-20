@@ -86,7 +86,7 @@ final class SyncTest extends TestCase
         $this->assertSame(7, DB::table('news')->count());
         $this->assertSame($authors, DB::table('news_authors')->where('record_id', $other)->count());
         $this->assertNotNull(DB::table('news')->find($other));
-        $this->assertSame(26, DB::table('wordpress_map')->count());
+        $this->assertSame(27, DB::table('wordpress_map')->count());
     }
 
     public function test_prune_without_anything_to_take_away_says_so(): void
@@ -97,7 +97,7 @@ final class SyncTest extends TestCase
 
         $this->assertSame(0, $exit);
         $this->assertStringContainsString('Deleted: 0', $output);
-        $this->assertSame(27, DB::table('wordpress_map')->count());
+        $this->assertSame(28, DB::table('wordpress_map')->count());
     }
 
     public function test_prune_takes_away_a_trashed_post_and_one_that_is_not_a_post_any_more(): void
@@ -192,7 +192,7 @@ final class SyncTest extends TestCase
         $this->assertNull(DB::table('news')->find($hello), 'the model is still there, so the record goes');
     }
 
-    public function test_prune_takes_away_only_posts(): void
+    public function test_prune_takes_away_only_posts_and_menus(): void
     {
         $this->fullRun();
         $terms = DB::table('wordpress_map')->where('kind', 'term')->count();
@@ -204,7 +204,9 @@ final class SyncTest extends TestCase
         $this->cli('atrium:wordpress:migrate:data', ['--only-changed' => true]);
         [, $output] = $this->cli('atrium:wordpress:sync', ['--prune' => true]);
 
-        $this->assertStringContainsString('Deleted: 0', $output);
+        // The one menu of the site went with its term: it is not a term or an author or a file.
+        $this->assertStringContainsString('Deleted: 1', $output);
+        $this->assertFalse($this->moved('menu', Wp::TERM_MAIN_MENU + Wp::TT_OFFSET));
         $this->assertSame($terms, DB::table('wordpress_map')->where('kind', 'term')->count());
         $this->assertSame($authors, DB::table('wordpress_map')->where('kind', 'author')->count());
         $this->assertSame($files, DB::table('wordpress_map')->where('kind', 'attachment')->count());
@@ -222,7 +224,7 @@ final class SyncTest extends TestCase
         [, $output] = $this->cli('atrium:wordpress:sync', ['--prune' => true]);
 
         $this->assertStringContainsString('Deleted: 205', $output);
-        $this->assertSame(27, DB::table('wordpress_map')->count());
+        $this->assertSame(28, DB::table('wordpress_map')->count());
     }
 
     public function test_prune_works_in_chunks_of_the_configured_size(): void

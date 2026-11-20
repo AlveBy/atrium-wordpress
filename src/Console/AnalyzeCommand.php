@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace Atrium\WordPress\Console;
 
+use Atrium\WordPress\Import\Navigation;
+use Atrium\WordPress\Import\Records;
 use Atrium\WordPress\Plan\Field;
 use Atrium\WordPress\Plan\Plan;
 
@@ -57,10 +59,23 @@ final class AnalyzeCommand extends WordPressCommand
             implode(', ', $taxonomy->types) ?: '-',
         ], $plan->taxonomies));
 
+        $this->line($this->menusLine($records));
         $this->line('Authors go to the table '.$plan->authorsTable.'; attachments to /'.ltrim((string) config('atrium-wordpress.uploads_target'), '/').' and the media library.');
         $this->line('Next: php artisan atrium:wordpress:migrate');
 
         return self::SUCCESS;
+    }
+
+    private function menusLine(Records $records): string
+    {
+        $menus = (new Navigation($records))->menus();
+        $count = count($menus);
+
+        return match (true) {
+            $count === 0 => 'Menus: none',
+            Navigation::installed() => "Menus: {$count} go to the menus module, with their items",
+            default => "Menus: {$count} are not moved until the menus module (alveby/atrium-menus) is installed",
+        };
     }
 
     /**

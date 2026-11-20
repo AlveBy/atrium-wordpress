@@ -11,6 +11,7 @@ namespace Atrium\WordPress\Tests;
 
 use Atrium\Admin\AtriumServiceProvider;
 use Atrium\Admin\Support\PublicUrl;
+use Atrium\Menus\MenusServiceProvider;
 use Atrium\News\NewsServiceProvider;
 use Atrium\Pages\PagesServiceProvider;
 use Atrium\Theme\ThemeServiceProvider;
@@ -28,7 +29,7 @@ use Tighten\Ziggy\ZiggyServiceProvider;
 
 /**
  * A made-up WordPress database on its own SQLite connection, an Atrium with
- * the News and Pages modules on the database CI picked, and a folder of its
+ * the News, Pages and Menus modules on the database CI picked, and a folder of its
  * own for the generated code and the copied files.
  */
 abstract class TestCase extends Orchestra
@@ -64,6 +65,7 @@ abstract class TestCase extends Orchestra
             ThemeServiceProvider::class,
             NewsServiceProvider::class,
             PagesServiceProvider::class,
+            MenusServiceProvider::class,
             WordPressServiceProvider::class,
         ];
     }
@@ -96,7 +98,7 @@ abstract class TestCase extends Orchestra
             'prefix' => '',
             'foreign_key_constraints' => false,
         ]);
-        $config->set('atrium.modules', ['alveby/atrium-news', PagesServiceProvider::MODULE]);
+        $config->set('atrium.modules', ['alveby/atrium-news', PagesServiceProvider::MODULE, MenusServiceProvider::MODULE]);
         $config->set('atrium.demo', false);
         $config->set('atrium.auth.two_factor.enabled', false);
         $config->set('atrium.dashboard.timings.enabled', false);
@@ -108,7 +110,7 @@ abstract class TestCase extends Orchestra
     }
 
     /**
-     * The News and Pages tables come with their packages. They are handed to
+     * The News, Pages and Menus tables come with their packages. They are handed to
      * the migrator rather than loaded with loadMigrationsFrom(), which after
      * the first test runs and rolls them back around every test: dozens of
      * CREATE and DROP statements per test, minutes on MySQL.
@@ -117,6 +119,7 @@ abstract class TestCase extends Orchestra
     {
         $this->app['migrator']->path(__DIR__.'/../../news/database/migrations');
         $this->app['migrator']->path(__DIR__.'/../../pages/database/migrations');
+        $this->app['migrator']->path(__DIR__.'/../../menus/database/migrations');
     }
 
     protected function setUp(): void

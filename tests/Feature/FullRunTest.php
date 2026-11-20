@@ -72,9 +72,9 @@ final class FullRunTest extends TestCase
         $this->assertSame(1, DB::table('media_library_collections')->where('name', 'WordPress')->count());
         $this->assertSame(6, DB::table('seo_meta')->count());
 
-        // 8 posts + 5 pages + 2 recipes + 7 terms + 2 authors + 3 files.
-        $this->assertSame(27, DB::table('wordpress_map')->count());
-        $this->assertSame(['attachment' => 3, 'author' => 2, 'post' => 15, 'term' => 7], DB::table('wordpress_map')->selectRaw('kind, count(*) as aggregate')->groupBy('kind')->orderBy('kind')->pluck('aggregate', 'kind')->map(fn ($n): int => (int) $n)->all());
+        // 8 posts + 5 pages + 2 recipes + 7 terms + 2 authors + 3 files + 1 menu.
+        $this->assertSame(28, DB::table('wordpress_map')->count());
+        $this->assertSame(['attachment' => 3, 'author' => 2, 'menu' => 1, 'post' => 15, 'term' => 7], DB::table('wordpress_map')->selectRaw('kind, count(*) as aggregate')->groupBy('kind')->orderBy('kind')->pluck('aggregate', 'kind')->map(fn ($n): int => (int) $n)->all());
 
         // Trashed, auto-draft and revision posts, and the ACF definitions, did not move.
         foreach ([Wp::TRASHED, Wp::AUTO_DRAFT, Wp::REVISION, Wp::ACF_GROUP, Wp::PHOTO] as $skipped) {

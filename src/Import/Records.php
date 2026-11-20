@@ -235,6 +235,46 @@ final class Records
     }
 
     /**
+     * The record a term became, by the term's own ID (what a menu item names)
+     * rather than its term_taxonomy_id.
+     */
+    public function termRecordByTerm(int $termId, string $taxonomy): ?int
+    {
+        foreach ($this->terms as $termTaxonomyId => $term) {
+            if ((int) $term->term_id === $termId && $term->taxonomy === $taxonomy) {
+                return $this->termRecord($termTaxonomyId);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The record a post became: its type and the post that stands for its
+     * translation group. Null for a post that does not move (trashed, of a
+     * type left behind, gone).
+     *
+     * @return array{type:Type,main:int}|null
+     */
+    public function postRecord(int $id): ?array
+    {
+        $row = $this->plan->source->posts([$id])[$id] ?? null;
+        $type = $row === null ? null : $this->plan->type((string) $row->post_type);
+
+        if ($type === null || ! $type->moves()) {
+            return null;
+        }
+
+        foreach ($this->index($type)['groups'] as $main => $members) {
+            if (in_array($id, $members, true)) {
+                return ['type' => $type, 'main' => $main];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The users who wrote the posts that move. Never their passwords: they
      * become authors to credit, not people who sign in.
      *
@@ -864,7 +904,7 @@ final class Records
         return Carbon::parse($utc, 'UTC')->setTimezone((string) config('app.timezone'))->format('Y-m-d H:i:s');
     }
 
-    private function note(string $key, string $text): void
+    public function note(string $key, string $text): void
     {
         $this->notes[$key] = $text;
     }

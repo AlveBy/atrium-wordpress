@@ -82,6 +82,31 @@ trait ImportsWordPress
     }
 
     /**
+     * Adds a menu (a term of nav_menu) to the old site; its term and its
+     * term_taxonomy share the ID.
+     */
+    protected function wpMenu(int $id, string $name, string $slug = '', string $prefix = 'wp_'): void
+    {
+        $this->wp()->table($prefix.'terms')->insert(['term_id' => $id, 'name' => $name, 'slug' => $slug ?: Str::slug($name), 'term_group' => 0]);
+        $this->wp()->table($prefix.'term_taxonomy')->insert(['term_taxonomy_id' => $id, 'term_id' => $id, 'taxonomy' => 'nav_menu', 'description' => '', 'parent' => 0, 'count' => 0]);
+    }
+
+    /**
+     * Adds an item to a menu of the old site, with the meta WordPress keeps
+     * on it. The meta names go without the "_menu_item_" prefix: type,
+     * object, object_id, url, menu_item_parent, target.
+     *
+     * @param  array<string,string|int>  $meta
+     * @param  array<string,mixed>  $values  columns of wp_posts
+     */
+    protected function wpMenuItem(int $id, int $menu, string $title, array $meta, int $order = 0, array $values = [], string $prefix = 'wp_'): void
+    {
+        $this->wpPost($id, 'nav_menu_item', $title, ['menu_order' => $order, ...$values], $prefix);
+        $this->wpMeta($id, collect($meta)->mapWithKeys(static fn (string|int $value, string $key): array => ['_menu_item_'.$key => (string) $value])->all(), $prefix);
+        $this->wp()->table($prefix.'term_relationships')->insert(['object_id' => $id, 'term_taxonomy_id' => $menu, 'term_order' => 0]);
+    }
+
+    /**
      * Adds meta to a post of the old site.
      *
      * @param  array<string,string>  $meta

@@ -81,6 +81,8 @@ final class ParityTest extends TestCase
             'posts:page' => ['wordpress' => 5, 'atrium' => 5, 'problems' => 0],
             'posts:post' => ['wordpress' => 8, 'atrium' => 8, 'problems' => 0],
             'posts:recipe' => ['wordpress' => 2, 'atrium' => 2, 'problems' => 0],
+            'menus' => ['wordpress' => 1, 'atrium' => 1, 'problems' => 0],
+            'menu items' => ['wordpress' => 0, 'atrium' => 0, 'problems' => 0],
         ], $report['summary']);
         $this->assertSame(['the file 2024/07/missing.jpg of attachment 52 is missing in the old uploads folder too'], $report['warnings']);
         $this->assertContains('user 99 wrote posts but is not in wp_users: they move without an author', $report['notes']);
@@ -269,7 +271,7 @@ final class ParityTest extends TestCase
 
         $this->assertSame(0, $exit);
         $this->assertStringStartsWith("# WordPress → Atrium\n\n| What | WordPress | Atrium | Problems |\n|---|---|---|---|\n| languages | 2 | 2 | 0 |\n| authors | 2 | 2 | 0 |\n", $output);
-        $this->assertStringContainsString("| posts:recipe | 2 | 2 | 0 |\n\n## Not moved\n\n- the file 2024/07/missing.jpg of attachment 52 is missing in the old uploads folder too\n\n## Already broken on the old site\n\n- post 34 is a child of post 999", $output);
+        $this->assertStringContainsString("| posts:recipe | 2 | 2 | 0 |\n| menus | 1 | 1 | 0 |\n| menu items | 0 | 0 | 0 |\n\n## Not moved\n\n- the file 2024/07/missing.jpg of attachment 52 is missing in the old uploads folder too\n\n## Already broken on the old site\n\n- post 34 is a child of post 999", $output);
         $this->assertStringNotContainsString('## Differences', $output);
         $this->assertStringEndsWith("Everything moved.\n", $output);
     }
