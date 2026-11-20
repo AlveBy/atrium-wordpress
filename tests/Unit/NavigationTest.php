@@ -186,9 +186,17 @@ final class NavigationTest extends TestCase
         $this->site();
         $this->wp()->table('wp_term_taxonomy')->where('taxonomy', 'nav_menu')->delete();
         $navigation = $this->navigation();
+        $this->wp()->enableQueryLog();
+        $this->wp()->flushQueryLog();
 
         $this->assertSame([], $navigation->menus());
         $this->assertSame([], $this->notes());
+
+        // Nothing but the terms is read when there is no menu.
+        foreach ($this->wp()->getQueryLog() as $query) {
+            $this->assertStringNotContainsString('wp_options', $query['query']);
+            $this->assertStringNotContainsString('wp_posts', $query['query']);
+        }
 
         // Read once: a menu that comes later is not seen by the same object.
         $this->wpMenu(300, 'Late menu');
@@ -784,6 +792,9 @@ final class NavigationTest extends TestCase
     {
         $this->site();
         $this->wpPost(5003, 'post', '');
+        // An item that names no object must not find the post 1 or -1.
+        $this->wpPost(1, 'post', 'Post one');
+        $this->wpPost(-1, 'post', 'Post minus one');
         $this->wpMenu(300, 'Primary navigation');
         $items = [
             // [title, meta]
@@ -808,6 +819,10 @@ final class NavigationTest extends TestCase
             3016 => ['', ['type' => 'custom', 'url' => '/nameless', 'object_id' => Wp::HELLO]],
             3017 => ['', ['type' => 'post_type_archive', 'object' => 'post', 'object_id' => Wp::HELLO]],
             3018 => ['', []],
+            // Only an item of a taxonomy takes the name of a term.
+            3019 => ['', ['type' => 'custom', 'url' => '/nameless', 'object' => 'category', 'object_id' => Wp::TERM_NEWS]],
+            3020 => ['', ['type' => 'post_type_archive', 'object' => 'category', 'object_id' => Wp::TERM_NEWS]],
+            3021 => ['', ['type' => 'post_type', 'object' => 'post']],
         ];
 
         foreach ($items as $id => [$title, $meta]) {
@@ -833,7 +848,37 @@ final class NavigationTest extends TestCase
             3016 => 'Untitled 3016',
             3017 => 'Untitled 3017',
             3018 => 'Untitled 3018',
+            3019 => 'Untitled 3019',
+            3020 => 'Untitled 3020',
+            3021 => 'Untitled 3021',
         ], $this->field($this->items(300), 'title'));
+    }
+
+    public function test_ids_that_come_as_strings_are_read_as_numbers(): void
+    {
+        $this->site('polylang');
+        $this->wpMenu(300, 'Primary', 'primary');
+        $this->wpMenu(301, 'Principal', 'principal');
+        $this->option('stylesheet', 'sitetheme');
+        $this->option('theme_mods_sitetheme', serialize(['nav_menu_locations' => ['top' => 300]]));
+        $this->polylang(['nav_menus' => ['sitetheme' => ['primary' => ['en' => 300, 'ru' => 301]]]]);
+        // "10" comes after "9" whatever the strings say.
+        $this->wpMenuItem(3001, 300, 'Ten', ['type' => 'custom', 'url' => '/ten'], 10);
+        $this->wpMenuItem(3002, 300, 'Nine', ['type' => 'custom', 'url' => '/nine'], 9);
+        $this->wpMenuItem(3003, 300, '', ['type' => 'taxonomy', 'object' => 'category', 'object_id' => Wp::TERM_NEWS], 8);
+        $this->wp()->getPdo()->setAttribute(\PDO::ATTR_STRINGIFY_FETCHES, true);
+
+        $menus = $this->menus();
+
+        $this->assertSame([109 => null, 300 => 'en', 301 => 'ru'], array_column($menus, 'language', 'id'));
+        $this->assertSame([109 => 'main-menu', 300 => 'primary', 301 => 'primary'], array_column($menus, 'code', 'id'));
+        $this->assertSame([3003, 3002, 3001], array_column($this->menu($menus, 300)['items'], 'id'));
+        $this->assertSame('News', $this->menu($menus, 300)['items'][0]['title']);
+        $this->assertSame([
+            $this->located('top', 'Primary', 'primary'),
+            $this->located('primary', 'Primary', 'primary'),
+            $this->located('primary', 'Principal', 'primary'),
+        ], $this->notes());
     }
 
     public function test_an_item_without_a_title_keeps_the_title_of_a_post_that_did_not_move(): void

@@ -24,6 +24,7 @@ use Atrium\WordPress\Tests\Fixtures\SyntheticWordPress as Wp;
 use Atrium\WordPress\Tests\TestCase;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
+use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -759,8 +760,8 @@ final class MenusImportTest extends TestCase
 
     public function test_a_menu_of_another_site_does_not_take_the_code(): void
     {
-        $shop = $this->shopSite();
         $this->prepare();
+        $shop = $this->shopSite();
         $this->menuRow('primary', 'en', $shop);
         $this->wpMenu(200, 'Primary');
 
@@ -773,9 +774,9 @@ final class MenusImportTest extends TestCase
 
     public function test_the_menus_go_to_the_site_of_the_config(): void
     {
-        $shop = $this->shopSite();
         config()->set('atrium-wordpress.site', 'shop');
         $this->prepare();
+        $shop = $this->shopSite();
         $this->menuRow('primary', 'en');
         $this->menuRow('footer', 'en', $shop);
         $this->wpMenu(200, 'Primary');
@@ -958,6 +959,15 @@ final class MenusImportTest extends TestCase
             Schema::drop($table);
         }
 
+        // MySQL commits with each DROP: the tables do not come back with the
+        // rollback, and what the test wrote stays. The next test gets the
+        // schema built again.
+        $db = DB::connection();
+
+        if ($db->transactionLevel() > 0 && ! $db->getPdo()->inTransaction()) {
+            RefreshDatabaseState::$migrated = false;
+        }
+
         $this->resumeTransaction();
     }
 
@@ -1125,9 +1135,9 @@ final class MenusImportTest extends TestCase
 
     public function test_prune_takes_away_the_menu_of_the_site_in_the_config(): void
     {
-        DB::table('admin_sites')->insert(['code' => 'shop', 'name' => 'Shop', 'active' => true, 'is_default' => false, 'sort' => 200, 'created_at' => now(), 'updated_at' => now()]);
         config()->set('atrium-wordpress.site', 'shop');
         $this->prepare();
+        $this->shopSite();
         $this->wpMenu(200, 'Primary');
         $this->wpMenuItem(301, 200, 'Home', $this->custom('/'));
         $this->move();
@@ -1319,9 +1329,9 @@ final class MenusImportTest extends TestCase
 
     public function test_the_audit_finds_the_menus_of_the_site_in_the_config(): void
     {
-        DB::table('admin_sites')->insert(['code' => 'shop', 'name' => 'Shop', 'active' => true, 'is_default' => false, 'sort' => 200, 'created_at' => now(), 'updated_at' => now()]);
         config()->set('atrium-wordpress.site', 'shop');
         $this->prepare();
+        $this->shopSite();
         $this->simpleMenu();
         $this->move();
 

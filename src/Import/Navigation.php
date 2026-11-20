@@ -109,7 +109,7 @@ final class Navigation
      * The items of every menu as trees: menu term_taxonomy_id => items.
      *
      * @param  array<int,object>  $menus
-     * @param  array{locations:array<int,array<int,string>>,languages:array<int,string>,groups:array<int,string>}  $placed
+     * @param  array{locations:array<int,array<int,int|string>>,languages:array<int,string>,groups:array<int,string>}  $placed
      * @return array<int,array<int,array<string,mixed>>>
      */
     private function itemsByMenu(array $menus, array $placed): array
@@ -171,7 +171,7 @@ final class Navigation
     {
         $seen = [];
 
-        for ($parent = $items[$id]['parent']; $parent !== 0 && isset($items[$parent]); $parent = $items[$parent]['parent']) {
+        for ($parent = $items[$id]['parent']; isset($items[$parent]); $parent = $items[$parent]['parent']) {
             if ($parent === $id) {
                 return true;
             }
@@ -181,7 +181,7 @@ final class Navigation
                 return false;
             }
 
-            $seen[$parent] = true;
+            $seen[$parent] = $parent;
         }
 
         return false;
@@ -195,7 +195,7 @@ final class Navigation
     private function branch(array $items, array $children, int $parent, ?string $language): array
     {
         $ids = $children[$parent] ?? [];
-        usort($ids, static fn (int $a, int $b): int => [(int) $items[$a]['post']->menu_order, $a] <=> [(int) $items[$b]['post']->menu_order, $b]);
+        usort($ids, fn (int $a, int $b): int => [$this->id($items[$a]['post']->menu_order), $a] <=> [$this->id($items[$b]['post']->menu_order), $b]);
 
         return array_map(fn (int $id): array => [
             'id' => $id,
@@ -221,13 +221,13 @@ final class Navigation
             return $title;
         }
 
-        $object = (int) ($item['meta']['_menu_item_object_id'] ?? 0);
+        $object = $this->objectId($item['meta']);
 
         if (($item['meta']['_menu_item_type'] ?? '') === 'post_type') {
             $title = $this->records->content->text($this->records->plan->source->posts([$object])[$object]->post_title ?? '');
         } elseif (($item['meta']['_menu_item_type'] ?? '') === 'taxonomy') {
             foreach ($this->records->plan->source->terms() as $term) {
-                if ((int) $term->term_id === $object && $term->taxonomy === ($item['meta']['_menu_item_object'] ?? '')) {
+                if ($this->id($term->term_id) === $object && $term->taxonomy === ($item['meta']['_menu_item_object'] ?? '')) {
                     $title = $this->records->content->text($term->name);
                 }
             }
@@ -247,7 +247,7 @@ final class Navigation
     {
         $type = $meta['_menu_item_type'] ?? '';
         $object = $meta['_menu_item_object'] ?? '';
-        $target = (int) ($meta['_menu_item_object_id'] ?? 0);
+        $target = $this->objectId($meta);
 
         if ($type === 'custom') {
             $url = trim($meta['_menu_item_url'] ?? '');
@@ -276,7 +276,7 @@ final class Navigation
      * Theme location => the menu's term_id, and the language of a menu that
      * Polylang gave its own location.
      *
-     * @return array{locations:array<int,array<int,string>>,languages:array<int,string>,groups:array<int,string>}
+     * @return array{locations:array<int,array<int,int|string>>,languages:array<int,string>,groups:array<int,string>}
      */
     private function placements(): array
     {
@@ -286,20 +286,39 @@ final class Navigation
         $placed = ['locations' => [], 'languages' => [], 'groups' => []];
 
         foreach ($this->array($mods['nav_menu_locations'] ?? null) as $location => $term) {
-            $placed['locations'][(int) $term][] = (string) $location;
+            $placed['locations'][$this->id($term)][] = $location;
         }
 
         $polylang = Serialized::toArray($source->option('polylang'));
 
         foreach ($this->array($this->array($polylang['nav_menus'] ?? null)[$theme] ?? null) as $location => $byLanguage) {
             foreach ($this->array($byLanguage) as $language => $term) {
-                $placed['locations'][(int) $term][] = (string) $location;
-                $placed['languages'][(int) $term] = Languages::code((string) $language);
-                $placed['groups'][(int) $term] = 'location:'.$location;
+                $placed['locations'][$this->id($term)][] = $location;
+                $placed['languages'][$this->id($term)] = Languages::code((string) $language);
+                $placed['groups'][$this->id($term)] = sprintf('location:%s', $location);
             }
         }
 
         return $placed;
+    }
+
+    /**
+     * An id as it came from the database or from an unserialized option: an
+     * integer, or a string of digits.
+     */
+    private function id(mixed $value): int
+    {
+        return (int) $value;
+    }
+
+    /**
+     * The post or term an item points to; 0 for an item that points to none.
+     *
+     * @param  array<string,string>  $meta
+     */
+    private function objectId(array $meta): int
+    {
+        return $this->id($meta['_menu_item_object_id'] ?? 0);
     }
 
     /**
@@ -314,7 +333,7 @@ final class Navigation
     }
 
     /**
-     * @param  array{locations:array<int,array<int,string>>,languages:array<int,string>,groups:array<int,string>}  $placed
+     * @param  array{locations:array<int,array<int,int|string>>,languages:array<int,string>,groups:array<int,string>}  $placed
      */
     private function language(object $term, array $placed): ?string
     {
@@ -322,7 +341,7 @@ final class Navigation
 
         return match ($languages->plugin()) {
             'wpml' => $languages->ofTerm($term),
-            'polylang' => $placed['languages'][(int) $term->term_id] ?? null,
+            'polylang' => $placed['languages'][$this->id($term->term_id)] ?? null,
             default => null,
         };
     }
@@ -331,7 +350,7 @@ final class Navigation
      * Menus that are translations of each other share a code, so that the
      * theme asks for one and gets the language it shows.
      *
-     * @param  array{locations:array<int,array<int,string>>,languages:array<int,string>,groups:array<int,string>}  $placed
+     * @param  array{locations:array<int,array<int,int|string>>,languages:array<int,string>,groups:array<int,string>}  $placed
      */
     private function group(object $term, array $placed): string
     {
@@ -339,8 +358,8 @@ final class Navigation
 
         return match ($languages->plugin()) {
             'wpml' => $languages->termGroup($term),
-            'polylang' => $placed['groups'][(int) $term->term_id] ?? 'term:'.$term->term_taxonomy_id,
-            default => 'term:'.$term->term_taxonomy_id,
+            'polylang' => $placed['groups'][$this->id($term->term_id)] ?? sprintf('term:%s', $term->term_taxonomy_id),
+            default => sprintf('term:%s', $term->term_taxonomy_id),
         };
     }
 
@@ -364,11 +383,11 @@ final class Navigation
     /**
      * Atrium has no theme locations: a theme asks for a menu by its code.
      *
-     * @param  array{locations:array<int,array<int,string>>,languages:array<int,string>,groups:array<int,string>}  $placed
+     * @param  array{locations:array<int,array<int,int|string>>,languages:array<int,string>,groups:array<int,string>}  $placed
      */
     private function locations(object $term, string $code, array $placed): void
     {
-        foreach ($placed['locations'][(int) $term->term_id] ?? [] as $location) {
+        foreach ($placed['locations'][$this->id($term->term_id)] ?? [] as $location) {
             $this->records->note("menu-location:{$location}:{$term->term_taxonomy_id}", "the theme location \"{$location}\" showed the menu \"{$term->name}\"; Atrium has no locations, the theme draws it by its code: <x-atrium-menu code=\"{$code}\" />");
         }
     }
